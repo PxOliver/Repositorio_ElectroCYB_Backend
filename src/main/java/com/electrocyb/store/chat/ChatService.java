@@ -55,19 +55,27 @@ public class ChatService {
             return faqAnswer;
         }
 
-        // 2) Detección de intención
-        Intent intent = detectIntent(normalized);
+        // 2) Búsqueda en catálogo SIEMPRE
+        ProductSearchResult searchResult = productAdviceService.findProductsForMessage(userMessage);
 
-        switch (intent) {
-            case PRODUCT_INFO -> {
-                // Búsqueda inteligente + texto de IA, pero LAS VIÑETAS LAS ARMAMOS NOSOTROS
-                return replyWithProductIntelligence(userMessage);
-            }
-            case GENERAL -> {
-                return callOpenAIGeneral(request);
-            }
+        // ¿parece consulta de producto por palabras clave?
+        Intent intent = detectIntent(normalized);
+        boolean looksLikeProductByKeywords = (intent == Intent.PRODUCT_INFO);
+
+        // ¿parece consulta de producto porque la búsqueda encontró algo contundente?
+        boolean hasSolidProducts =
+                searchResult != null
+                        && searchResult.products() != null
+                        && !searchResult.products().isEmpty()
+                        && searchResult.type() != SearchType.FALLBACK;
+
+        boolean shouldAnswerWithProducts = looksLikeProductByKeywords || hasSolidProducts;
+
+        if (shouldAnswerWithProducts) {
+            return replyWithProductIntelligence(userMessage, searchResult);
         }
 
+        // 3) Si no hay productos relevantes → LLM general
         return callOpenAIGeneral(request);
     }
 
@@ -75,8 +83,17 @@ public class ChatService {
     // PRODUCTOS INTELIGENTES
     // ==========================================================
 
+    // Versión pública que recalcula si hace falta
     private String replyWithProductIntelligence(String userMessage) {
         ProductSearchResult result = productAdviceService.findProductsForMessage(userMessage);
+        return replyWithProductIntelligence(userMessage, result);
+    }
+
+    // Versión que reutiliza el resultado ya calculado
+    private String replyWithProductIntelligence(String userMessage, ProductSearchResult result) {
+        if (result == null) {
+            result = productAdviceService.findProductsForMessage(userMessage);
+        }
 
         if (result.type() == SearchType.NO_PRODUCTS_IN_DB) {
             return """
@@ -223,14 +240,14 @@ public class ChatService {
         try {
             List<Map<String, Object>> choices = (List<Map<String, Object>>) response.get("choices");
             if (choices == null || choices.isEmpty())
-                return "Lo siento, no pude generar una respuesta.";
+                return "En este momento tengo un problema técnico para responder. Inténtalo de nuevo en unos segundos, por favor 🙏";
 
             Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
             Object content = message.get("content");
-            return content != null ? content.toString() : "Lo siento, no pude responder.";
+            return content != null ? content.toString() : "En este momento no pude generar una respuesta. Intenta nuevamente, por favor.";
         } catch (Exception e) {
             e.printStackTrace();
-            return "Ocurrió un error al procesar tu consulta.";
+            return "Ocurrió un error al procesar tu consulta. Inténtalo nuevamente en unos momentos, por favor 🙏";
         }
     }
 

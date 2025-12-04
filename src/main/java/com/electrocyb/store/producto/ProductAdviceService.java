@@ -77,7 +77,7 @@ public class ProductAdviceService {
     }
 
     // ==========================================================
-    // Sinónimos y stopwords
+    // Sinónimos, stopwords y tipos de producto
     // ==========================================================
 
     // Sinónimos básicos por dominio (normalizados, sin tildes)
@@ -107,6 +107,30 @@ public class ProductAdviceService {
             "precio", "barato", "barata", "caro", "cara", "tipo", "hay", "tienen",
             "por", "favor", "podrias", "podrías", "alrededor", "alrededor de",
             "aproximadamente", "cerca", "cerca de"
+    );
+
+    // Tipo de producto: lámparas / plafones / focos
+    private static final Set<String> LAMP_KEYWORDS = Set.of(
+            "lampara", "lamparas", "plafon", "plafones", "panel", "paneles",
+            "foco", "focos", "spot", "dicroico", "dicroicos"
+    );
+
+    // Tipo de producto: tiras / cintas / mangueras
+    private static final Set<String> STRIP_KEYWORDS = Set.of(
+            "tira", "tiras", "tira led",
+            "cinta", "cintas", "cinta led",
+            "manguera", "mangueras", "manguera led",
+            "neon", "neón", "cinta led neon"
+    );
+
+    // Palabras de ambientes (para sumar puntos si calza, pero no filtramos duro)
+    private static final Set<String> ROOM_KEYWORDS = Set.of(
+            "sala", "comedor", "dormitorio", "habitacion", "habitación",
+            "cocina", "baño", "bano", "pasillo", "pasadizo"
+    );
+
+    private static final Set<String> SIGN_KEYWORDS = Set.of(
+            "letrero", "letreros", "aviso", "avisos", "cartel", "carteles"
     );
 
     // ==========================================================
@@ -245,6 +269,8 @@ public class ProductAdviceService {
                 .map(sp -> sp.product)
                 // ⚠️ SOLO productos que coinciden con los tokens centrales del usuario
                 .filter(p -> matchesCoreTokens(p, coreTokens))
+                // ⚠️ Y que respetan la CLASE de producto (lámpara vs tira/manguera)
+                .filter(p -> isProductClassCompatible(p, normalizedMsg))
                 .collect(Collectors.toList());
 
         // Si los puntajes son muy parejos pero bajos, preferimos no inventar nada
@@ -447,8 +473,7 @@ public class ProductAdviceService {
     }
 
     /**
-     * Score de relevancia: texto + categoría + nombre + precio + stock.
-     * Mientras más alto, más relacionado con lo que pide el usuario.
+     * Score de relevancia: texto + categoría + nombre + precio + ambiente + stock.
      */
     private int scoreProduct(Producto p, String normalizedMsg, List<String> keywords, PriceRange range) {
         int score = 0;
@@ -501,6 +526,21 @@ public class ProductAdviceService {
                     }
                 }
             }
+        }
+
+        // Bonus ambiente: si el usuario dice "sala" y el producto menciona "sala", etc.
+        String msg = normalizedMsg;
+        boolean msgRoom = containsAny(msg, ROOM_KEYWORDS);
+        boolean msgSign = containsAny(msg, SIGN_KEYWORDS);
+
+        boolean prodRoom = containsAny(productText, ROOM_KEYWORDS);
+        boolean prodSign = containsAny(productText, SIGN_KEYWORDS);
+
+        if (msgRoom && prodRoom) {
+            score += 15; // mejor aún si dice "sala" y el producto también
+        }
+        if (msgRoom && prodSign) {
+            score -= 10; // el usuario habla de sala y el producto habla de letreros → menos relevante
         }
 
         return score;
@@ -581,6 +621,56 @@ public class ProductAdviceService {
             return hits >= 2; // al menos 2 tokens relevantes deben aparecer
         }
         return hits >= 1;
+    }
+
+    /**
+     * Forzamos coherencia de clase:
+     * - Si el usuario pide "lámpara para sala" y NO menciona tira/manguera,
+     *   no devolvemos cintas/mangueras puras.
+     * - Si pide "tira led para letrero" y no menciona lámpara, no devolvemos lámparas.
+     */
+    private boolean isProductClassCompatible(Producto p, String normalizedMsg) {
+        String msg = normalizedMsg;
+
+        String productText = normalize(
+                (p.getNombre() == null ? "" : p.getNombre()) + " " +
+                (p.getCategoria() == null ? "" : p.getCategoria()) + " " +
+                (p.getDescripcion() == null ? "" : p.getDescripcion())
+        );
+
+        boolean wantsLamp = containsAny(msg, LAMP_KEYWORDS);
+        boolean wantsStrip = containsAny(msg, STRIP_KEYWORDS);
+
+        boolean productIsLamp = containsAny(productText, LAMP_KEYWORDS);
+        boolean productIsStrip = containsAny(productText, STRIP_KEYWORDS);
+
+        if (wantsLamp && !wantsStrip) {
+            // Usuario pidió lámpara → NO devolver solo cintas/mangueras
+            if (productIsStrip && !productIsLamp) {
+                return false;
+            }
+        }
+
+        if (wantsStrip && !wantsLamp) {
+            // Usuario pidió tira/manguera → NO devolver lámparas puras
+            if (productIsLamp && !productIsStrip) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private boolean containsAny(String text, Set<String> tokens) {
+        if (text == null || text.isBlank() || tokens == null || tokens.isEmpty()) {
+            return false;
+        }
+        for (String t : tokens) {
+            if (text.contains(t)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String normalize(String input) {
