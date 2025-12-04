@@ -116,36 +116,49 @@ public class PedidoService {
     private double calcularCostoEnvio(ClienteEmbeddable cliente) {
         if (cliente == null) return 12.0;
 
+        // 🟢 Recojo en tienda: envío 0
+        if (cliente.getDireccion() != null &&
+                cliente.getDireccion().equalsIgnoreCase("RECOJO_EN_TIENDA")) {
+            return 0.0;
+        }
+
         String base = "";
         if (cliente.getDireccion() != null) base += cliente.getDireccion() + " ";
         if (cliente.getReferencia() != null) base += cliente.getReferencia();
 
         String text = base.toLowerCase();
 
+        // ZONA A - Lima Centro (S/ 8)
         if (containsAny(text, "cercado de lima", "lima", "breña", "pueblo libre",
                 "jesús maría", "jesus maria", "lince", "la victoria",
                 "san miguel", "magdalena del mar", "magdalena")) return 8.0;
 
+        // ZONA B - Lima moderna (S/ 10)
         if (containsAny(text, "miraflores", "san isidro", "surquillo",
                 "barranco", "san borja")) return 10.0;
 
+        // ZONA C - Lima sur / este cercano (S/ 12)
         if (containsAny(text, "santiago de surco", "surco", "chorrillos", "la molina",
                 "san luis", "rímac", "rimac")) return 12.0;
 
+        // ZONA D - Lima norte / este lejano (S/ 14)
         if (containsAny(text, "san juan de lurigancho", "san juan de miraflores",
                 "villa el salvador", "villa maría del triunfo", "villa maria del triunfo",
                 "comas", "independencia", "los olivos", "san martín de porres",
                 "san martin de porres", "ate", "el agustino", "santa anita",
                 "carabayllo")) return 14.0;
 
+        // ZONA E - Callao (S/ 15)
         if (containsAny(text, "callao", "bellavista", "la perla",
                 "la punta", "carmen de la legua")) return 15.0;
 
+        // ZONA F - DEPARTAMENTOS COSTA (S/ 20)
         if (containsAny(text, "tumbes", "piura", "lambayeque", "chiclayo",
                 "la libertad", "trujillo", "ancash", "chimbote",
                 "ica", "pisco", "chincha", "moquegua",
                 "tacna", "arequipa")) return 20.0;
 
+        // ZONA G - DEPARTAMENTOS SIERRA / SELVA (S/ 24)
         if (containsAny(text, "cajamarca", "amazonas", "san martín", "san martin",
                 "loreto", "huánuco", "huanuco", "pasco",
                 "junín", "junin", "huancavelica", "ayacucho",
@@ -153,6 +166,7 @@ public class PedidoService {
                 "madre de dios", "ucayali", "huancayo",
                 "juliaca", "tarapoto")) return 24.0;
 
+        // Default
         return 12.0;
     }
 
