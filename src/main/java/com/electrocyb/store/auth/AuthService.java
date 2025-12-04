@@ -39,7 +39,7 @@ public class AuthService {
         this.emailService = emailService;
     }
 
-    // 🔹 REGISTRO: crea usuario deshabilitado y envía correo de verificación
+    // 🔹 REGISTRO: crea usuario y envía correo de verificación
     public void register(RegisterRequest request) {
         if (userRepository.findByEmail(request.email()).isPresent()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El email ya está registrado");
@@ -51,7 +51,7 @@ public class AuthService {
                 .password(passwordEncoder.encode(request.password()))
                 .phone(request.phone())
                 .role(Role.CUSTOMER)
-                .enabled(false) // 👈 importante: deshabilitado hasta verificar
+                .enabled(true) // ahora mismo lo dejamos habilitado
                 .build();
 
         userRepository.save(user);
@@ -63,7 +63,7 @@ public class AuthService {
         vt.setExpiryDate(Instant.now().plus(24, ChronoUnit.HOURS)); // 24h de validez
         verificationTokenRepository.save(vt);
 
-        // Enviar correo de verificación
+        // Enviar correo de verificación (aunque no lo uses estrictamente para bloquear login)
         try {
             emailService.sendVerificationEmail(
                     user.getEmail(),
@@ -95,7 +95,7 @@ public class AuthService {
         verificationTokenRepository.delete(vt);
     }
 
-    // 🔹 LOGIN (solo permite usuarios habilitados)
+    // 🔹 LOGIN (ahora NO bloquea por isEnabled)
     public AuthResponse login(LoginRequest request) {
         Authentication auth = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
@@ -107,12 +107,13 @@ public class AuthService {
         User user = userRepository.findByEmail(request.email())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Usuario no encontrado"));
 
-        if (!user.isEnabled()) {
-            throw new ResponseStatusException(
-                    HttpStatus.UNAUTHORIZED,
-                    "Debes verificar tu correo antes de iniciar sesión."
-            );
-        }
+        // 🚫 BLOQUE DESACTIVADO: ya no obliga a verificar correo
+        // if (!user.isEnabled()) {
+        //     throw new ResponseStatusException(
+        //             HttpStatus.UNAUTHORIZED,
+        //             "Debes verificar tu correo antes de iniciar sesión."
+        //     );
+        // }
 
         // Notificación de inicio de sesión (opcional)
         try {
