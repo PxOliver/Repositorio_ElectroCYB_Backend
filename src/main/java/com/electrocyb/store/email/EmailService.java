@@ -5,7 +5,7 @@ import com.electrocyb.store.pedido.OrderItem;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
@@ -16,8 +16,13 @@ import java.nio.charset.StandardCharsets;
 @RequiredArgsConstructor
 public class EmailService {
 
-    @Autowired
     private final JavaMailSender mailSender;
+
+    @Value("${mail.from}")
+    private String fromEmail; // vendrá de MAIL_FROM (SendGrid)
+
+    @Value("${app.frontend.base-url}")
+    private String frontendBaseUrl; // ej: https://repositorio-electrocyb-frontend.onrender.com
 
     // =====================================
     // MÉTODO GENERAL PARA ENVIAR EMAIL HTML
@@ -34,7 +39,9 @@ public class EmailService {
         helper.setTo(request.to());
         helper.setSubject(request.subject());
         helper.setText(request.html(), true);
-        helper.setFrom("no-reply@electrocyb.com");
+
+        // Remitente configurable (debe ser un remitente/dominio verificado en SendGrid)
+        helper.setFrom(fromEmail);
 
         mailSender.send(message);
     }
@@ -134,7 +141,8 @@ public class EmailService {
     public void sendVerificationEmail(String email, String nombre, String token)
             throws MessagingException {
 
-        String verifyUrl = "http://localhost:5173/verificar?token=" + token;
+        // Usa la URL configurada (local o Render)
+        String verifyUrl = frontendBaseUrl + "/verificar?token=" + token;
 
         String html = """
             <html>
@@ -233,7 +241,6 @@ public class EmailService {
         return text == null ? "" : text;
     }
 
-    // sobrecarga por si se pasa un Number como String en buildOrderHtml
     private String safe(Object obj) {
         return obj == null ? "" : String.valueOf(obj);
     }
