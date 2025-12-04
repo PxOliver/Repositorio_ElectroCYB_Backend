@@ -70,7 +70,7 @@ public class AuthService {
                     user.getFullName(),
                     vt.getToken()
             );
-        } catch (MessagingException e) {
+        } catch (Exception e) {
             // No rompemos el flujo de registro, solo log
             e.printStackTrace();
         }
