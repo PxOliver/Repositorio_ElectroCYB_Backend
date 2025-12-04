@@ -2,6 +2,8 @@ package com.electrocyb.store.pedido;
 
 import com.electrocyb.store.email.EmailService;
 import com.electrocyb.store.pedido.dto.*;
+import com.electrocyb.store.producto.Producto;
+import com.electrocyb.store.producto.ProductoRepository;
 import jakarta.mail.MessagingException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,15 +16,19 @@ public class PedidoService {
 
     private final PedidoRepository pedidoRepository;
     private final EmailService emailService;
+    private final ProductoRepository productoRepository;
 
     public PedidoService(PedidoRepository pedidoRepository,
-                         EmailService emailService) {
+                         EmailService emailService,
+                         ProductoRepository productoRepository) {
         this.pedidoRepository = pedidoRepository;
         this.emailService = emailService;
+        this.productoRepository = productoRepository;
     }
 
     @Transactional
     public OrderResponseDto crearPedido(CreateOrderRequest request, String emailUsuario) {
+
         Pedido pedido = new Pedido();
         pedido.setFecha(Instant.now());
         pedido.setEstado(OrderStatus.RECIBIDO);
@@ -39,7 +45,21 @@ public class PedidoService {
 
         // Items
         double subtotal = 0.0;
+
         for (OrderItemRequest itemReq : request.items()) {
+
+            // 🔥 DESCONTAR STOCK ANTES DE GUARDAR EL PEDIDO
+            Producto producto = productoRepository.findById(itemReq.productoId())
+                    .orElseThrow(() -> new RuntimeException("Producto no encontrado: " + itemReq.nombre()));
+
+            if (producto.getStock() < itemReq.cantidad()) {
+                throw new RuntimeException("Stock insuficiente para: " + producto.getNombre());
+            }
+
+            producto.setStock(producto.getStock() - itemReq.cantidad());
+            productoRepository.save(producto);
+
+            // Crear item del pedido
             OrderItem item = new OrderItem();
             item.setProductoId(itemReq.productoId());
             item.setNombre(itemReq.nombre());
@@ -47,40 +67,36 @@ public class PedidoService {
             item.setImagen(itemReq.imagen());
             item.setCantidad(itemReq.cantidad());
             item.setPedido(pedido);
-
             pedido.getItems().add(item);
 
             try {
                 double precio = Double.parseDouble(itemReq.precio());
                 subtotal += precio * itemReq.cantidad();
-            } catch (NumberFormatException e) {
-                // si algo raro viene, lo tratamos como 0
-            }
+            } catch (NumberFormatException ignored) {}
         }
 
-        // Guardamos el subtotal
+        // Subtotal
         pedido.setSubtotal(subtotal);
 
         // Costo de envío
         double costoEnvio = calcularCostoEnvio(c);
         pedido.setCostoEnvio(costoEnvio);
 
-        // Total = subtotal + envío
+        // Total
         pedido.setTotal(subtotal + costoEnvio);
 
-        // Historial inicial
+        // Historial
         HistorialEstadoEmbeddable h = new HistorialEstadoEmbeddable();
         h.setEstado(OrderStatus.RECIBIDO);
         h.setFecha(Instant.now());
         h.setDescripcion("Pedido recibido.");
         pedido.getHistorialEstados().add(h);
 
-        // Guardamos para obtener ID
+        // Guardar pedido
         pedido = pedidoRepository.save(pedido);
 
-        // Generar número de pedido tipo EC-000001
+        // Generar número EC-000001
         pedido.setNumeroPedido(generarCodigoPedido(pedido.getId()));
-
         pedido = pedidoRepository.save(pedido);
 
         return mapToDto(pedido);
@@ -97,134 +113,56 @@ public class PedidoService {
         return "EC-" + String.format("%06d", id);
     }
 
-    /**
-     * Regla de negocio para el costo de delivery.
-     */
     private double calcularCostoEnvio(ClienteEmbeddable cliente) {
-        if (cliente == null) {
-            return 12.0;
-        }
+        if (cliente == null) return 12.0;
 
         String base = "";
-        if (cliente.getDireccion() != null) {
-            base += cliente.getDireccion() + " ";
-        }
-        if (cliente.getReferencia() != null) {
-            base += cliente.getReferencia();
-        }
+        if (cliente.getDireccion() != null) base += cliente.getDireccion() + " ";
+        if (cliente.getReferencia() != null) base += cliente.getReferencia();
 
         String text = base.toLowerCase();
 
-        // ZONA A - Lima Centro (S/ 8)
-        if (containsAny(text,
-                "cercado de lima", "lima",
-                "breña",
-                "pueblo libre",
-                "jesús maría", "jesus maria",
-                "lince",
-                "la victoria",
-                "san miguel",
-                "magdalena del mar", "magdalena")) {
-            return 8.0;
-        }
+        if (containsAny(text, "cercado de lima", "lima", "breña", "pueblo libre",
+                "jesús maría", "jesus maria", "lince", "la victoria",
+                "san miguel", "magdalena del mar", "magdalena")) return 8.0;
 
-        // ZONA B - Lima moderna (S/ 10)
-        if (containsAny(text,
-                "miraflores",
-                "san isidro",
-                "surquillo",
-                "barranco",
-                "san borja")) {
-            return 10.0;
-        }
+        if (containsAny(text, "miraflores", "san isidro", "surquillo",
+                "barranco", "san borja")) return 10.0;
 
-        // ZONA C - Lima sur / este cercano (S/ 12)
-        if (containsAny(text,
-                "santiago de surco", "surco",
-                "chorrillos",
-                "la molina",
-                "san luis",
-                "rímac", "rimac")) {
-            return 12.0;
-        }
+        if (containsAny(text, "santiago de surco", "surco", "chorrillos", "la molina",
+                "san luis", "rímac", "rimac")) return 12.0;
 
-        // ZONA D - Lima norte / este lejano (S/ 14)
-        if (containsAny(text,
-                "san juan de lurigancho",
-                "san juan de miraflores",
-                "villa el salvador",
-                "villa maría del triunfo", "villa maria del triunfo",
-                "comas",
-                "independencia",
-                "los olivos",
-                "san martín de porres", "san martin de porres",
-                "ate",
-                "el agustino",
-                "santa anita",
-                "carabayllo")) {
-            return 14.0;
-        }
+        if (containsAny(text, "san juan de lurigancho", "san juan de miraflores",
+                "villa el salvador", "villa maría del triunfo", "villa maria del triunfo",
+                "comas", "independencia", "los olivos", "san martín de porres",
+                "san martin de porres", "ate", "el agustino", "santa anita",
+                "carabayllo")) return 14.0;
 
-        // ZONA E - Callao (S/ 15)
-        if (containsAny(text,
-                "callao",
-                "bellavista",
-                "la perla",
-                "la punta",
-                "carmen de la legua")) {
-            return 15.0;
-        }
+        if (containsAny(text, "callao", "bellavista", "la perla",
+                "la punta", "carmen de la legua")) return 15.0;
 
-        // ZONA F - DEPARTAMENTOS COSTA (S/ 20)
-        if (containsAny(text,
-                "tumbes",
-                "piura",
-                "lambayeque", "chiclayo",
-                "la libertad", "trujillo",
-                "ancash", "chimbote",
-                "ica", "pisco", "chincha",
-                "moquegua",
-                "tacna",
-                "arequipa")) {
-            return 20.0;
-        }
+        if (containsAny(text, "tumbes", "piura", "lambayeque", "chiclayo",
+                "la libertad", "trujillo", "ancash", "chimbote",
+                "ica", "pisco", "chincha", "moquegua",
+                "tacna", "arequipa")) return 20.0;
 
-        // ZONA G - DEPARTAMENTOS SIERRA / SELVA (S/ 24)
-        if (containsAny(text,
-                "cajamarca",
-                "amazonas",
-                "san martín", "san martin",
-                "loreto",
-                "huánuco", "huanuco",
-                "pasco",
-                "junín", "junin",
-                "huancavelica",
-                "ayacucho",
-                "cusco",
-                "puno",
-                "apurímac", "apurimac",
-                "madre de dios",
-                "ucayali",
-                "huancayo",
-                "juliaca",
-                "tarapoto")) {
-            return 24.0;
-        }
+        if (containsAny(text, "cajamarca", "amazonas", "san martín", "san martin",
+                "loreto", "huánuco", "huanuco", "pasco",
+                "junín", "junin", "huancavelica", "ayacucho",
+                "cusco", "puno", "apurímac", "apurimac",
+                "madre de dios", "ucayali", "huancayo",
+                "juliaca", "tarapoto")) return 24.0;
 
         return 12.0;
     }
 
     private boolean containsAny(String text, String... tokens) {
-        for (String token : tokens) {
-            if (text.contains(token.toLowerCase())) {
-                return true;
-            }
-        }
+        for (String token : tokens) if (text.contains(token.toLowerCase())) return true;
         return false;
     }
 
     private OrderResponseDto mapToDto(Pedido pedido) {
-        // items
+
         List<OrderItemDto> itemDtos = pedido.getItems() == null
                 ? List.of()
                 : pedido.getItems().stream()
@@ -233,27 +171,26 @@ public class PedidoService {
                         i.getNombre(),
                         i.getPrecio(),
                         i.getImagen(),
-                        i.getCantidad()))
-                .toList();
+                        i.getCantidad()
+                )).toList();
 
-        // historial
         List<HistorialEstadoDto> historialDtos = pedido.getHistorialEstados() == null
                 ? List.of()
                 : pedido.getHistorialEstados().stream()
                 .map(h -> new HistorialEstadoDto(
                         h.getEstado(),
                         h.getFecha(),
-                        h.getDescripcion()))
-                .toList();
+                        h.getDescripcion()
+                )).toList();
 
-        // cliente
         ClienteEmbeddable c = pedido.getCliente();
         ClienteDto clienteDto = new ClienteDto(
                 c != null ? c.getNombre() : null,
                 c != null ? c.getEmail() : null,
                 c != null ? c.getTelefono() : null,
                 c != null ? c.getDireccion() : null,
-                c != null ? c.getReferencia() : null);
+                c != null ? c.getReferencia() : null
+        );
 
         return new OrderResponseDto(
                 pedido.getId(),
@@ -265,7 +202,8 @@ public class PedidoService {
                 pedido.getTotal(),
                 clienteDto,
                 itemDtos,
-                historialDtos);
+                historialDtos
+        );
     }
 
     @Transactional(readOnly = true)
@@ -293,28 +231,25 @@ public class PedidoService {
         Pedido pedido = pedidoRepository.findByNumeroPedido(numeroPedido)
                 .orElseThrow(() -> new RuntimeException("Pedido no encontrado"));
 
-        // actualizar estado
         pedido.setEstado(nuevoEstado);
 
-        // historial
         HistorialEstadoEmbeddable h = new HistorialEstadoEmbeddable();
         h.setEstado(nuevoEstado);
         h.setFecha(Instant.now());
         h.setDescripcion(
                 (descripcion != null && !descripcion.isBlank())
                         ? descripcion
-                        : "Estado actualizado a " + nuevoEstado.name());
+                        : "Estado actualizado a " + nuevoEstado.name()
+        );
 
         pedido.getHistorialEstados().add(h);
 
         pedido = pedidoRepository.save(pedido);
 
-        // 👉 Enviar correo sólo cuando el pedido está ENTREGADO
         if (nuevoEstado == OrderStatus.ENTREGADO) {
             try {
                 emailService.sendOrderDeliveredEmail(pedido);
             } catch (MessagingException e) {
-                // No rompemos la lógica si falla el correo
                 e.printStackTrace();
             }
         }
