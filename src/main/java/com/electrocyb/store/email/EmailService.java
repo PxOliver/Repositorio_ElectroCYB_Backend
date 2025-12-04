@@ -2,48 +2,66 @@ package com.electrocyb.store.email;
 
 import com.electrocyb.store.pedido.Pedido;
 import com.electrocyb.store.pedido.OrderItem;
+import com.sendgrid.*;
+import com.sendgrid.helpers.mail.Mail;
+import com.sendgrid.helpers.mail.objects.Content;
+import com.sendgrid.helpers.mail.objects.Email;
 import jakarta.mail.MessagingException;
-import jakarta.mail.internet.MimeMessage;
-import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
-import java.nio.charset.StandardCharsets;
+import java.io.IOException;
 
 @Service
-@RequiredArgsConstructor
+@Slf4j
 public class EmailService {
 
-    private final JavaMailSender mailSender;
+    private final SendGrid sendGrid;
 
     @Value("${mail.from}")
-    private String fromEmail; // vendrá de MAIL_FROM (SendGrid)
+    private String fromEmail;
+
+    @Value("${mail.from.name:ElectroCYB}")
+    private String fromName;
 
     @Value("${app.frontend.base-url}")
-    private String frontendBaseUrl; // ej: https://repositorio-electrocyb-frontend.onrender.com
+    private String frontendBaseUrl;
+
+    // Inyectamos la API key de SendGrid desde application.properties / env
+    public EmailService(@Value("${sendgrid.api-key}") String apiKey) {
+        this.sendGrid = new SendGrid(apiKey);
+    }
 
     // =====================================
     // MÉTODO GENERAL PARA ENVIAR EMAIL HTML
     // =====================================
     public void sendHtmlEmail(EmailRequest request) throws MessagingException {
-        MimeMessage message = mailSender.createMimeMessage();
+        Email from = new Email(fromEmail, fromName);
+        Email to = new Email(request.to());
 
-        MimeMessageHelper helper = new MimeMessageHelper(
-                message,
-                MimeMessageHelper.MULTIPART_MODE_MIXED_RELATED,
-                StandardCharsets.UTF_8.name()
-        );
+        Content content = new Content("text/html", request.html());
+        Mail mail = new Mail(from, request.subject(), to, content);
 
-        helper.setTo(request.to());
-        helper.setSubject(request.subject());
-        helper.setText(request.html(), true);
+        Request sgRequest = new Request();
+        sgRequest.setMethod(Method.POST);
+        sgRequest.setEndpoint("mail/send");
 
-        // Remitente configurable (debe ser un remitente/dominio verificado en SendGrid)
-        helper.setFrom(fromEmail);
+        try {
+            sgRequest.setBody(mail.build());
+            Response response = sendGrid.api(sgRequest);
 
-        mailSender.send(message);
+            int status = response.getStatusCode();
+            if (status >= 400) {
+                log.error("Error al enviar correo con SendGrid. Status: {}, body: {}",
+                        status, response.getBody());
+                throw new MessagingException("Error SendGrid: " + status + " - " + response.getBody());
+            }
+
+        } catch (IOException e) {
+            log.error("Error IO al enviar correo con SendGrid", e);
+            throw new MessagingException("Error enviando correo con SendGrid", e);
+        }
     }
 
     // =====================================
@@ -141,7 +159,6 @@ public class EmailService {
     public void sendVerificationEmail(String email, String nombre, String token)
             throws MessagingException {
 
-        // Usa la URL configurada (local o Render)
         String verifyUrl = frontendBaseUrl + "/verificar?token=" + token;
 
         String html = """
