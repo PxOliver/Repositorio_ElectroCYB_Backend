@@ -7,5 +7,6 @@ public record CreateOrderRequest(
         List<OrderItemRequest> items,
         String metodoPago,
         String metodoEntrega, // 👈 NECESARIO para recojo en tienda = 0 envío
+        Double costoEnvio,
         String notas
 ) {}

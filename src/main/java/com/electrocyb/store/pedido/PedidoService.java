@@ -43,6 +43,9 @@ public class PedidoService {
         c.setReferencia(request.cliente().referencia());
         pedido.setCliente(c);
 
+        // Si tu entidad Pedido tiene campo metodoEntrega, aquí podrías setearlo:
+        // pedido.setMetodoEntrega(request.metodoEntrega());
+
         // Items
         double subtotal = 0.0;
 
@@ -78,8 +81,14 @@ public class PedidoService {
         // Subtotal
         pedido.setSubtotal(subtotal);
 
-        // Costo de envío
-        double costoEnvio = calcularCostoEnvio(c);
+        // ✅ Costo de envío: usar el que viene del frontend si existe
+        double costoEnvio;
+        if (request.costoEnvio() != null) {
+            costoEnvio = request.costoEnvio();
+        } else {
+            // Fallback por si algún cliente viejo no envía costoEnvio
+            costoEnvio = calcularCostoEnvio(c);
+        }
         pedido.setCostoEnvio(costoEnvio);
 
         // Total
