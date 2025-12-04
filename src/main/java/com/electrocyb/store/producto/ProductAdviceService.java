@@ -14,6 +14,12 @@ public class ProductAdviceService {
 
     private final ProductoRepository productoRepository;
 
+    // Umbrales de relevancia
+    private static final int MIN_STRONG_SCORE_ABSOLUTE = 80;     // puntaje mínimo absoluto
+    private static final double STRONG_SCORE_RATIO = 0.80;       // 80% del mejor
+    private static final int MAX_PRODUCTS_RESPONSE = 4;          // máximo productos por respuesta
+    private static final int CATALOG_LIMIT = 12;                 // tamaño máximo de catálogo general
+
     public ProductAdviceService(ProductoRepository productoRepository) {
         this.productoRepository = productoRepository;
     }
@@ -96,7 +102,7 @@ public class ProductAdviceService {
             "producto", "productos", "me", "recomiendame", "recomiendeme", "recomienda",
             "hasta", "maximo", "minimo", "entre", "desde", "soles", "s", "aprox",
             "al", "menos", "mas", "de", "a", "y", "como", "el", "la", "los", "las",
-            "todos", "todas", "catalogo", "catalogo.", "catálogo", "lista", "completa",
+            "todos", "todas", "catalogo", "catalogo.", "catalogo,", "catálogo", "lista", "completa",
             "dame", "muestrame", "muéstrame", "ensename", "enséname", "quiero comprar",
             "precio", "barato", "barata", "caro", "cara", "tipo", "hay", "tienen",
             "por", "favor", "podrias", "podrías", "alrededor", "alrededor de",
@@ -109,6 +115,8 @@ public class ProductAdviceService {
 
     /**
      * Búsqueda estructurada para que el ChatService pueda usarla.
+     * Aquí se hace TODO el trabajo de entender el mensaje y mapearlo
+     * a productos concretos del catálogo.
      */
     public ProductSearchResult findProductsForMessage(String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {
@@ -134,7 +142,7 @@ public class ProductAdviceService {
             );
         }
 
-        // 2) BÚSQUEDA DIRECTA POR NOMBRE EN BD (match fuerte)
+        // 2) BÚSQUEDA DIRECTA POR NOMBRE EN BD (match fuerte por nombre literal)
         List<Producto> fromDbByName = productoRepository
                 .findTop5ByNombreContainingIgnoreCase(original);
 
@@ -147,13 +155,12 @@ public class ProductAdviceService {
             );
         }
 
-        // 3) Catálogo completo / lista de productos
+        // 3) Catálogo completo / lista de productos (solo cuando piden "todo")
         if (isAskForAllProducts(normalizedMsg)) {
-            int limit = 20;
             List<Producto> limited = todos.stream()
-                    .limit(limit)
+                    .limit(CATALOG_LIMIT)
                     .collect(Collectors.toList());
-            boolean truncated = todos.size() > limit;
+            boolean truncated = todos.size() > CATALOG_LIMIT;
 
             return new ProductSearchResult(
                     limited,
@@ -228,12 +235,16 @@ public class ProductAdviceService {
 
         // 9) Filtrar solo los matches FUERTES (top score)
         int maxScore = scored.get(0).score;
-        int minScoreThreshold = Math.max(50, (int) (maxScore * 0.7)); // 70% del mejor o mínimo 50
+        int minScoreThreshold = Math.max(
+                MIN_STRONG_SCORE_ABSOLUTE,
+                (int) (maxScore * STRONG_SCORE_RATIO)
+        );
 
         List<Producto> strongMatches = scored.stream()
                 .filter(sp -> sp.score >= minScoreThreshold)
                 .map(sp -> sp.product)
-                .filter(p -> matchesCoreTokens(p, coreTokens)) // ⚠️ SOLO productos del tipo que pidió
+                // ⚠️ SOLO productos que coinciden con los tokens centrales del usuario
+                .filter(p -> matchesCoreTokens(p, coreTokens))
                 .collect(Collectors.toList());
 
         // Si los puntajes son muy parejos pero bajos, preferimos no inventar nada
@@ -280,9 +291,9 @@ public class ProductAdviceService {
             );
         }
 
-        // 13) Top 5–8
+        // 13) Top N (respuesta acotada, precisa)
         List<Producto> top = filtered.stream()
-                .limit(8)
+                .limit(MAX_PRODUCTS_RESPONSE)
                 .collect(Collectors.toList());
 
         return new ProductSearchResult(
@@ -366,19 +377,27 @@ public class ProductAdviceService {
     // Helpers internos
     // ==========================================================
 
+    /**
+     * Solo devolvemos catálogo completo cuando el usuario pide explícitamente
+     * "todo el catálogo", "todos los productos", "lista completa", etc.
+     * Si solo dice "catálogo de focos", se va por búsqueda específica.
+     */
     private boolean isAskForAllProducts(String normalizedMsg) {
-        return normalizedMsg.contains("todos los productos")
+        boolean mentionsCatalog = normalizedMsg.contains("catalogo")
+                || normalizedMsg.contains("catálogo")
+                || normalizedMsg.contains("lista de productos")
+                || normalizedMsg.contains("lista completa");
+
+        boolean wantsEverything = normalizedMsg.contains("todos los productos")
                 || normalizedMsg.contains("todo el catalogo")
                 || normalizedMsg.contains("todo el catálogo")
-                || normalizedMsg.contains("lista de productos")
-                || normalizedMsg.contains("lista completa")
-                || normalizedMsg.contains("catalogo")
-                || normalizedMsg.contains("catálogo")
                 || normalizedMsg.contains("todo tu catalogo")
                 || normalizedMsg.contains("todo su catalogo")
                 || normalizedMsg.contains("todo tu catálogo")
                 || normalizedMsg.contains("ver todo")
                 || normalizedMsg.contains("todo lo que tienes");
+
+        return mentionsCatalog && wantsEverything;
     }
 
     private boolean nameMatchesUserInput(Producto p, String normalizedMsg) {
@@ -428,7 +447,8 @@ public class ProductAdviceService {
     }
 
     /**
-     * Score de relevancia: texto + categoría + nombre + precio + stock
+     * Score de relevancia: texto + categoría + nombre + precio + stock.
+     * Mientras más alto, más relacionado con lo que pide el usuario.
      */
     private int scoreProduct(Producto p, String normalizedMsg, List<String> keywords, PriceRange range) {
         int score = 0;
@@ -530,13 +550,14 @@ public class ProductAdviceService {
     }
 
     /**
-     * Verifica que el producto contenga al menos uno de los tokens
-     * que el usuario escribió (en nombre o categoría).
-     * Si no hay tokens (pregunta muy genérica), no filtra.
+     * Verifica que el producto contenga varios de los tokens que el usuario escribió
+     * (en nombre o categoría).
+     * - Si el usuario dio 1 token relevante → pedimos al menos 1 match.
+     * - Si dio 2 o más tokens → pedimos al menos 2 matches para ser más estrictos.
      */
     private boolean matchesCoreTokens(Producto p, List<String> coreTokens) {
         if (coreTokens == null || coreTokens.isEmpty()) {
-            return true; // no hay tipo específico
+            return true; // no hay tipo específico, no filtramos
         }
 
         String nameCat = normalize(
@@ -544,6 +565,7 @@ public class ProductAdviceService {
                 (p.getCategoria() == null ? "" : p.getCategoria())
         );
 
+        int hits = 0;
         for (String token : coreTokens) {
             if (token.length() < 3) continue;
             String t = normalize(token);
@@ -551,10 +573,14 @@ public class ProductAdviceService {
             String singular = t.endsWith("s") && t.length() > 3 ? t.substring(0, t.length() - 1) : t;
 
             if (nameCat.contains(t) || nameCat.contains(singular)) {
-                return true;
+                hits++;
             }
         }
-        return false;
+
+        if (coreTokens.size() >= 2) {
+            return hits >= 2; // al menos 2 tokens relevantes deben aparecer
+        }
+        return hits >= 1;
     }
 
     private String normalize(String input) {
