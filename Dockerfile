@@ -3,9 +3,13 @@ FROM eclipse-temurin:21-jdk AS build
 
 WORKDIR /app
 
+# Copiar todo el proyecto al contenedor
 COPY . .
 
-# Empaquetar el JAR
+# ✅ Dar permisos de ejecución al wrapper de Maven
+RUN chmod +x mvnw
+
+# Empaquetar el JAR (sin tests)
 RUN ./mvnw -DskipTests package
 
 # Etapa 2: Imagen final
@@ -13,7 +17,7 @@ FROM eclipse-temurin:21-jre
 
 WORKDIR /app
 
-# Copiar JAR generado
+# Copiar JAR generado desde la etapa de build
 COPY --from=build /app/target/electrocyb_backend-0.0.1-SNAPSHOT.jar app.jar
 
 # Render asigna dinámicamente el puerto en la variable PORT
